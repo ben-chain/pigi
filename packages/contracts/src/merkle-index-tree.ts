@@ -3,6 +3,9 @@ const Web3 = require('web3') // tslint:disable-line
 import debug from 'debug'
 const log = debug('info:merkle-index-tree')
 import { StateUpdate, STATE_ID_LENGTH }  from '@pigi/utils'
+import BigNum = require('bn.js')
+import { reverse } from '@pigi/utils'
+
 
 /* Internal Imports */
 
@@ -89,14 +92,14 @@ export class MerkleIndexTree {
     this.generate(parents)
   }
 
-  public getInclusionProof(leafIndex: number): MerkleIndexTreeNode[] {
-    if (!(leafIndex in this.levels[0])) {
-      throw new Error('Leaf index ' + leafIndex + ' not in bottom level of tree')
+  public getInclusionProof(leafPosition: number): MerkleIndexTreeNode[] {
+    if (!(leafPosition in this.levels[0])) {
+      throw new Error('Leaf index ' + leafPosition + ' not in bottom level of tree')
     }
 
     const inclusionProof: MerkleIndexTreeNode[] = []
     let parentIndex: number
-    let siblingIndex = getSiblingIndex(leafIndex)
+    let siblingIndex = getSiblingIndex(leafPosition)
     for (const level of this.levels) {
       const node = level[siblingIndex] || MerkleIndexTree.emptyNode(level[0].index.length)
       inclusionProof.push(node)
@@ -106,6 +109,75 @@ export class MerkleIndexTree {
       siblingIndex = getSiblingIndex(parentIndex)
     }
     return inclusionProof
+  }
+
+  /**
+   * Checks a Merkle proof.
+   * @param leafNode Leaf node to check.
+   * @param leafPosition Position of the leaf in the tree.
+   * @param inclusionProof Inclusion proof for that transaction.
+   * @param root The root node of the tree to check.
+   * @returns the implicit bounds covered by the leaf if the proof is valid.
+   */
+  public static verify(
+    leafNode: MerkleIndexTreeNode,
+    leafPosition: number,
+    inclusionProof: MerkleIndexTreeNode[],
+    root: Buffer
+  ): any {
+    if (leafPosition < 0) {
+      throw new Error('Invalid leaf position.')
+    }
+
+    // Compute the path based on the leaf index.
+    const path = reverse(
+      new BigNum(leafPosition).toString(2, inclusionProof.length)
+    )
+
+    // Need the first right sibling to ensure
+    // that the tree is monotonically increasing.
+    const firstRightSiblingIndex = path.indexOf('0')
+    const firstRightSibling = 
+      firstRightSiblingIndex >= 0
+        ? inclusionProof[firstRightSiblingIndex]
+        : undefined
+
+    let computed: MerkleIndexTreeNode = leafNode
+    let left: MerkleIndexTreeNode
+    let right: MerkleIndexTreeNode
+    for (let i = 0; i < inclusionProof.length; i++) {
+      const sibling = inclusionProof[i]
+
+      if (path[i] === '0') {
+        left = computed
+        right = sibling
+      } else {
+        left = sibling
+        right = computed
+
+        // If some right node further up the tree
+        // is less than the first right node,
+        // the tree construction must be invalid.
+        if (
+            firstRightSibling && // if it's the last leaf in tree, this doesn't exist
+            Buffer.compare(right.index, firstRightSibling.index) === -1)
+          {
+          throw new Error('Invalid Merkle Index Tree proof--potential intersection detected.')
+        }
+      }
+
+      computed = this.parent(left, right) // note: this checks left.index < right.index
+    }
+
+    // Check that the roots match.
+    if (Buffer.compare(computed.hash, root) !== 0) {
+      throw new Error('Invalid Merkle Index Tree roothash.')
+    }
+
+    return {
+      implicitStart: leafPosition == 0 ? new BigNum(0) : leafNode.index,
+      implicitEnd: firstRightSibling ? firstRightSibling.index : MerkleIndexTree.emptyNode(leafNode.index.length).index // messy way to get the max index
+    }
   }
 }
 
