@@ -100,7 +100,8 @@ export class MerkleIndexTree {
     const inclusionProof: MerkleIndexTreeNode[] = []
     let parentIndex: number
     let siblingIndex = getSiblingIndex(leafPosition)
-    for (const level of this.levels) {
+    for (let i = 0; i < this.levels.length - 1; i++) {
+      const level = this.levels[i]
       const node = level[siblingIndex] || MerkleIndexTree.emptyNode(level[0].index.length)
       inclusionProof.push(node)
 
@@ -123,7 +124,25 @@ export class MerkleIndexTree {
     leafNode: MerkleIndexTreeNode,
     leafPosition: number,
     inclusionProof: MerkleIndexTreeNode[],
-    root: Buffer
+    rootHash: Buffer
+  ): any {
+    const rootAndBounds = MerkleIndexTree.getRootAndBounds(
+      leafNode,
+      leafPosition,
+      inclusionProof
+    )
+    // Check that the roots match.
+    if (Buffer.compare(rootAndBounds.root.hash, rootHash) !== 0) {
+      throw new Error('Invalid Merkle Index Tree roothash.')
+    } else {
+      return rootAndBounds.bounds
+    }
+  }
+
+  public static getRootAndBounds(
+    leafNode: MerkleIndexTreeNode,
+    leafPosition: number,
+    inclusionProof: MerkleIndexTreeNode[],
   ): any {
     if (leafPosition < 0) {
       throw new Error('Invalid leaf position.')
@@ -133,6 +152,7 @@ export class MerkleIndexTree {
     const path = reverse(
       new BigNum(leafPosition).toString(2, inclusionProof.length)
     )
+    console.log('path: ', path)
 
     // Need the first right sibling to ensure
     // that the tree is monotonically increasing.
@@ -148,12 +168,12 @@ export class MerkleIndexTree {
     for (let i = 0; i < inclusionProof.length; i++) {
       const sibling = inclusionProof[i]
 
-      if (path[i] === '0') {
-        left = computed
-        right = sibling
-      } else {
+      if (path[i] === '1') {
         left = sibling
         right = computed
+      } else {
+        left = computed
+        right = sibling
 
         // If some right node further up the tree
         // is less than the first right node,
@@ -162,21 +182,22 @@ export class MerkleIndexTree {
             firstRightSibling && // if it's the last leaf in tree, this doesn't exist
             Buffer.compare(right.index, firstRightSibling.index) === -1)
           {
+            console.log('right: ', right)
+            console.log('firstRightSibling: ', firstRightSibling)
           throw new Error('Invalid Merkle Index Tree proof--potential intersection detected.')
         }
       }
 
       computed = this.parent(left, right) // note: this checks left.index < right.index
-    }
-
-    // Check that the roots match.
-    if (Buffer.compare(computed.hash, root) !== 0) {
-      throw new Error('Invalid Merkle Index Tree roothash.')
+      // console.log('computed at ' + i + ': ', computed)
     }
 
     return {
-      implicitStart: leafPosition == 0 ? new BigNum(0) : leafNode.index,
-      implicitEnd: firstRightSibling ? firstRightSibling.index : MerkleIndexTree.emptyNode(leafNode.index.length).index // messy way to get the max index
+      root: computed,
+      bounds: {
+        implicitStart: leafPosition == 0 ? new BigNum(0) : leafNode.index,
+        implicitEnd: firstRightSibling ? firstRightSibling.index : MerkleIndexTree.emptyNode(leafNode.index.length).index // messy way to get the max index
+      }
     }
   }
 }
@@ -210,5 +231,45 @@ export class PlasmaBlock extends MerkleIndexTree {
       bottom.push(new MerkleIndexTreeNode(merkleStateIndexTree.root().hash, subtreeContents.address))
     }
     return bottom
+  }
+
+  public getStateUpdateInclusionProof(
+    stateUpdatePosition: number,
+    addressPosition: number
+  ): any {
+    return {
+      stateTreeInclusionProof: this.subtrees[addressPosition].getInclusionProof(stateUpdatePosition),
+      addressTreeInclusionProof: this.getInclusionProof(addressPosition)
+    }
+  }
+
+  public static verifyStateUpdateInclusionProof(
+    stateUpdate: StateUpdate,
+    stateTreeInclusionProof: MerkleIndexTreeNode[],
+    stateUpdatePosition: number,
+    addressTreeInclusionProof: MerkleIndexTreeNode[],
+    addressPosition: number,
+    blockRootHash: Buffer
+  ): any {
+    const leafNodeHash: Buffer = sha3(stateUpdate.encoded)
+    const leafNodeIndex: Buffer = stateUpdate.start.toBuffer('be', STATE_ID_LENGTH)
+    const stateLeafNode: MerkleIndexTreeNode = new MerkleIndexTreeNode(leafNodeHash, leafNodeIndex)
+    console.log('calculaated stateLeafNode: ', stateLeafNode)
+    const stateUpdateRootAndBounds = MerkleIndexTree.getRootAndBounds(
+      stateLeafNode,
+      stateUpdatePosition,
+      stateTreeInclusionProof
+    )
+    console.log('stateUpdateRootAndBounds', stateUpdateRootAndBounds)
+
+    const addressLeafHash: Buffer = stateUpdateRootAndBounds.root.hash
+    const addressLeafIndex: Buffer = Buffer.from(stateUpdate.plasmaContract.slice(2), 'hex')
+    const addressLeafNode: MerkleIndexTreeNode = new MerkleIndexTreeNode(addressLeafHash, addressLeafIndex)
+    return MerkleIndexTree.verify(
+      addressLeafNode,
+      addressPosition,
+      addressTreeInclusionProof,
+      blockRootHash
+    )
   }
 }
