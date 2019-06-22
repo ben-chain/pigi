@@ -1,15 +1,9 @@
 /* External Imports */
 import BigNumber = require('bn.js')
 
-export interface MerkleIntervalTreeLeafNode {
-  start: BigNumber
-  end: BigNumber
-  data: Buffer
-}
-
-export interface MerkleIntervalTreeInternalNode {
+export interface MerkleIntervalTreeNode {
   index: BigNumber
   hash: Buffer
 }
 
-export type MerkleIntervalTreeInclusionProof = MerkleIntervalTreeInternalNode[]
+export type MerkleIntervalTreeInclusionProof = MerkleIntervalTreeNode[]
